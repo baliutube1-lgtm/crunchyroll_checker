@@ -1,12 +1,11 @@
-import os
 import telebot
 import asyncio
 from fastapi import FastAPI, Request
 
 app = FastAPI()
 
-# 🔑 Use Railway variable OR put token directly
-TOKEN = os.getenv("BOT_TOKEN") or "8677251975:AAGuEGmCIvQLUKO4j4dM7wGYMAExldG7ftM"
+# 🔑 PUT YOUR NEW TOKEN HERE (NOT OLD ONE)
+TOKEN =  "8677251975:AAGuEGmCIvQLUKO4j4dM7wGYMAExldG7ftM"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -20,13 +19,25 @@ async def root():
 async def webhook(request: Request):
     try:
         data = await request.json()
+        print(data)  # Debug log
 
         if "message" in data:
             msg = data["message"]
             chat_id = msg["chat"]["id"]
-            text = msg.get("text", "").strip().lower()
 
-            # /start
+            # Handle only text messages
+            text = msg.get("text")
+            if not text:
+                await asyncio.to_thread(
+                    bot.send_message,
+                    chat_id,
+                    "Please send text only 😊"
+                )
+                return {"ok": True}
+
+            text = text.strip().lower()
+
+            # /start command
             if text == "/start":
                 user = msg["from"]
 
@@ -41,7 +52,7 @@ async def webhook(request: Request):
                     f"Hello {name} 👋\n\nSend me: 5 + 3"
                 )
 
-            # calculator
+            # Calculator
             elif any(op in text for op in ["+", "-", "*", "/"]):
                 try:
                     result = eval(text)
