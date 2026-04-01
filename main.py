@@ -8,7 +8,7 @@ from io import BytesIO
 import telebot
 from fastapi import FastAPI, Request
 
-# SymPy units for conversion
+# SymPy units
 import sympy.physics.units as units_mod
 from sympy.physics.units.util import convert_to
 
@@ -33,7 +33,7 @@ def add_to_history(chat_id: int, expression: str, result: any):
     if chat_id not in chat_history:
         chat_history[chat_id] = []
     chat_history[chat_id].append({"expr": expression, "result": result})
-    if len(chat_history[chat_id]) > 20:
+    if len(chat_history[chat_id]) > 25:
         chat_history[chat_id].pop(0)
 
 def get_angle_mode(chat_id: int) -> str:
@@ -57,21 +57,26 @@ def get_safe_locals(chat_id: int = None):
     trig = create_trig_functions(mode)
 
     unit_dict = {
-        "m": units_mod.meter, "meter": units_mod.meter,
-        "km": units_mod.kilometer, "kilometer": units_mod.kilometer,
-        "cm": units_mod.centimeter, "centimeter": units_mod.centimeter,
-        "mm": units_mod.millimeter, "millimeter": units_mod.millimeter,
-        "mile": units_mod.mile,
-        "yard": units_mod.yard,
-        "ft": units_mod.foot, "foot": units_mod.foot,
-        "inch": units_mod.inch,
-        "kg": units_mod.kilogram, "kilogram": units_mod.kilogram,
-        "g": units_mod.gram, "gram": units_mod.gram,
-        "s": units_mod.second, "second": units_mod.second,
-        "min": units_mod.minute, "minute": units_mod.minute,
-        "h": units_mod.hour, "hour": units_mod.hour,
-        "joule": units_mod.joule,
-        "watt": units_mod.watt,
+        "m": units_mod.meter, "km": units_mod.kilometer, "cm": units_mod.centimeter,
+        "mm": units_mod.millimeter, "mile": units_mod.mile, "ft": units_mod.foot,
+        "inch": units_mod.inch, "kg": units_mod.kilogram, "g": units_mod.gram,
+        "s": units_mod.second, "min": units_mod.minute, "h": units_mod.hour,
+    }
+
+    # Statistics (accepts mean(1,2,3,4) style)
+    stats = {
+        "mean": lambda *x: float(np.mean(x)),
+        "median": lambda *x: float(np.median(x)),
+        "stdev": lambda *x: float(np.std(x, ddof=0)),
+        "variance": lambda *x: float(np.var(x, ddof=0)),
+    }
+
+    # Finance
+    finance = {
+        "compound": lambda p, r, t, n=1: p * (1 + r/n)**(n * t),
+        "simple_interest": lambda p, r, t: p * r * t,
+        "emi": lambda p, r, n: p * r * (1 + r)**n / ((1 + r)**n - 1) if r != 0 else p / n,
+        "fv": lambda p, r, n: p * (1 + r)**n,
     }
 
     return {
@@ -81,23 +86,24 @@ def get_safe_locals(chat_id: int = None):
         "sqrt": sp.sqrt,
         "log": sp.log, "log10": lambda x: sp.log(x, 10),
         "exp": sp.exp,
-        "pi": sp.pi, "e": sp.E,
+        "pi": sp.pi, "e": sp.E, "I": sp.I,          # Complex numbers!
         "abs": sp.Abs,
         "factorial": sp.factorial,
-        "floor": sp.floor,
-        "ceil": sp.ceiling,
+        "floor": sp.floor, "ceil": sp.ceiling,
         "mod": sp.Mod,
-        "rad": sp.rad,
-        "deg": sp.deg,
-        "integrate": sp.integrate,
-        "diff": sp.diff,
+        "rad": sp.rad, "deg": sp.deg,
+        "integrate": sp.integrate, "diff": sp.diff,
         "Matrix": sp.Matrix,
+        "comb": sp.binomial,
+        "perm": lambda n, k: sp.factorial(n) / sp.factorial(n - k) if n >= k else 0,
         "convert_to": convert_to,
+        **stats,
+        **finance,
         **unit_dict,
         **variables
     }
 
-# ====================== UNIT CONVERSION HELPER ======================
+# ====================== UNIT CONVERSION ======================
 def handle_unit_conversion(text: str, chat_id: int = None):
     lower = text.lower().strip()
     if " to " not in lower and " in " not in lower:
@@ -114,27 +120,27 @@ def handle_unit_conversion(text: str, chat_id: int = None):
             return None
         converted = convert_to(qty, to_unit)
         return f"✅ **Unit conversion:** `{qty}` = `{converted}`"
-    except Exception:
+    except:
         return None
 
 # ====================== LaTeX RENDERER ======================
 def render_latex_image(latex_str: str) -> BytesIO:
     plt.rcParams['mathtext.fontset'] = 'cm'
-    fig = plt.figure(figsize=(max(6, len(latex_str) // 8 + 1), 1.5))
+    fig = plt.figure(figsize=(max(6, len(latex_str)//8 + 1), 1.5))
     plt.text(0.5, 0.5, f"\( {latex_str} \)", fontsize=24, ha='center', va='center')
     plt.axis('off')
     buf = BytesIO()
-    plt.savefig(buf, format='png', dpi=300, bbox_inches='tight', transparent=True, pad_inches=0.2)
+    plt.savefig(buf, format='png', dpi=300, bbox_inches='tight', transparent=True)
     buf.seek(0)
     plt.close(fig)
     return buf
 
-# ====================== ULTRA SCIENTIFIC EVALUATOR ======================
+# ====================== EVALUATOR ======================
 def evaluate_expression(expression: str, chat_id: int = None):
     try:
         expr = expression.strip().replace("^", "**")
         expr = re.sub(r'(\d+\.?\d*)\s*%', r'(\1/100)', expr)
-        if not re.match(r"^[\d+\-*/().\s^,a-zA-Z=%[\],]+$", expr):
+        if not re.match(r"^[\d+\-*/().\s^,a-zA-Z=%[\]I]+$", expr):
             return None
 
         safe_locals = get_safe_locals(chat_id)
@@ -143,18 +149,16 @@ def evaluate_expression(expression: str, chat_id: int = None):
         if '=' in expr and expr.count('=') == 1:
             left, right = [part.strip() for part in expr.split('=', 1)]
             protected = {"sin","cos","tan","asin","acos","atan","sinh","cosh","tanh","asinh","acosh","atanh",
-                         "sqrt","log","log10","exp","pi","e","abs","factorial","floor","ceil","mod","rad","deg",
-                         "integrate","diff","Matrix","convert_to"}
+                         "sqrt","log","log10","exp","pi","e","I","abs","factorial","floor","ceil","mod","rad","deg",
+                         "integrate","diff","Matrix","comb","perm","mean","median","stdev","variance",
+                         "compound","simple_interest","emi","fv"}
             if left.isidentifier() and left not in protected:
-                try:
-                    val = sp.sympify(right, locals=safe_locals)
-                    if chat_id is not None:
-                        if chat_id not in chat_variables:
-                            chat_variables[chat_id] = {}
-                        chat_variables[chat_id][left] = val
-                    return f"✅ **Variable set:** `{left}` = `{val}`"
-                except:
-                    pass
+                val = sp.sympify(right, locals=safe_locals)
+                if chat_id is not None:
+                    if chat_id not in chat_variables:
+                        chat_variables[chat_id] = {}
+                    chat_variables[chat_id][left] = val
+                return f"✅ **Variable set:** `{left}` = `{val}`"
 
         # Equation solving
         if '=' in expr and expr.count('=') == 1:
@@ -169,7 +173,6 @@ def evaluate_expression(expression: str, chat_id: int = None):
             except:
                 pass
 
-        # Normal evaluation
         result = sp.sympify(expr, locals=safe_locals)
         try:
             numeric = result.evalf(12)
@@ -185,7 +188,7 @@ def evaluate_expression(expression: str, chat_id: int = None):
 # ====================== ROOT ======================
 @app.get("/")
 async def root():
-    return {"status": "🚀 Full Scientific Calculator Bot LIVE", "version": "v5.0 - Matrices + Integrals + Derivatives + Units + LaTeX"}
+    return {"status": "🚀 Ultimate Scientific Calculator LIVE", "version": "v6.0 - Complex + Finance + Statistics"}
 
 
 # ====================== WEBHOOK ======================
@@ -214,37 +217,32 @@ async def webhook(request: Request):
                 bot.send_message,
                 chat_id,
                 f"Hello {name} 👋\n\n"
-                "🚀 **Scientific Calculator v5.0** — Everything you asked for!\n\n"
+                "🚀 **Ultimate Scientific Calculator v6.0**\n\n"
                 f"📐 Angle mode: **{mode}**\n\n"
-                "✅ **New powerful tools:**\n"
-                "• `integrate(x**2, x)`  (indefinite)\n"
-                "• `integrate(x**2, (x,0,1))`  (definite)\n"
-                "• `diff(sin(x), x)`\n"
-                "• Matrices: `Matrix([[1,2],[3,4]]).inv()` or `.det()`\n"
-                "• Units: `5 km to m` or `1000 g to kg`\n"
-                "• LaTeX: `/latex integrate(x^2, x)`\n\n"
+                "✅ **NEW in v6.0:**\n"
+                "• Complex numbers: `1 + 2*I`, `sqrt(-1)`\n"
+                "• Finance: `compound(1000,0.05,10)`, `emi(100000,0.08/12,120)`\n"
+                "• Statistics: `mean(1,2,3,4)`, `stdev(...)`, `median(...)`\n"
+                "• Perm/Comb: `comb(5,2)`, `perm(5,2)`\n\n"
+                "Previous features still here:\n"
+                "integrals • derivatives • matrices • units • LaTeX • plot\n\n"
                 "Commands:\n"
-                "`/deg` `/rad` `/plot` `/history` `/vars` `/clear` `/clearvars` `/latex`\n"
-                "`/help` → Full list"
+                "`/deg` `/rad` `/plot` `/latex` `/history` `/vars` `/clear` `/clearvars`"
             )
 
         elif lower_text == "/deg":
             chat_angle_mode[chat_id] = "deg"
-            await asyncio.to_thread(bot.send_message, chat_id, "📐 **DEGREE** mode activated\nsin(30) = 0.5")
+            await asyncio.to_thread(bot.send_message, chat_id, "📐 **DEGREE** mode activated")
 
         elif lower_text == "/rad":
             chat_angle_mode[chat_id] = "rad"
-            await asyncio.to_thread(bot.send_message, chat_id, "📐 **RADIAN** mode activated\nsin(π/2) = 1")
+            await asyncio.to_thread(bot.send_message, chat_id, "📐 **RADIAN** mode activated")
 
         elif lower_text == "/history":
             history = chat_history.get(chat_id, [])
-            if not history:
-                await asyncio.to_thread(bot.send_message, chat_id, "📜 No history yet.")
-            else:
-                txt = "📜 **Your History:**\n\n"
-                for i, item in enumerate(reversed(history), 1):
-                    txt += f"{i}. `{item['expr']}` = **{item['result']}**\n"
-                await asyncio.to_thread(bot.send_message, chat_id, txt)
+            txt = "📜 **History empty**" if not history else "📜 **Your History:**\n\n" + "\n".join(
+                f"{i}. `{item['expr']}` = **{item['result']}**" for i, item in enumerate(reversed(history), 1))
+            await asyncio.to_thread(bot.send_message, chat_id, txt)
 
         elif lower_text == "/clear":
             chat_history[chat_id] = []
@@ -252,21 +250,15 @@ async def webhook(request: Request):
 
         elif lower_text == "/clearvars":
             chat_variables[chat_id] = {}
-            await asyncio.to_thread(bot.send_message, chat_id, "🗑️ All variables cleared!")
+            await asyncio.to_thread(bot.send_message, chat_id, "🗑️ Variables cleared!")
 
         elif lower_text == "/vars":
             vars_dict = chat_variables.get(chat_id, {})
-            if not vars_dict:
-                await asyncio.to_thread(bot.send_message, chat_id, "📌 No variables yet.\nTry: `x = 5`")
-            else:
-                txt = "📌 **Your Variables:**\n\n"
-                for v, val in vars_dict.items():
-                    txt += f"`{v}` = `{val}`\n"
-                await asyncio.to_thread(bot.send_message, chat_id, txt)
+            txt = "📌 No variables" if not vars_dict else "📌 **Your Variables:**\n\n" + "\n".join(f"`{v}` = `{val}`" for v, val in vars_dict.items())
+            await asyncio.to_thread(bot.send_message, chat_id, txt)
 
         # ==================== PLOT ====================
         elif lower_text.startswith("/plot"):
-            # (same as v4.0 - unchanged for brevity, full code kept in previous version)
             plot_expr = text[5:].strip()
             if not plot_expr:
                 await asyncio.to_thread(bot.send_message, chat_id, "📊 Usage: `/plot sin(x)`")
@@ -294,11 +286,11 @@ async def webhook(request: Request):
             except Exception:
                 await asyncio.to_thread(bot.send_message, chat_id, f"❌ Could not plot `{plot_expr}`")
 
-        # ==================== LaTeX RENDERING ====================
+        # ==================== LaTeX ====================
         elif lower_text.startswith("/latex"):
             expr = text[6:].strip()
             if not expr:
-                await asyncio.to_thread(bot.send_message, chat_id, "📐 Usage: `/latex integrate(x^2, x)` or any expression")
+                await asyncio.to_thread(bot.send_message, chat_id, "📐 Usage: `/latex integrate(x**2, x)`")
                 return {"ok": True}
             try:
                 safe = get_safe_locals(chat_id)
@@ -306,21 +298,16 @@ async def webhook(request: Request):
                 latex_str = sp.latex(sym_expr)
                 result = evaluate_expression(expr, chat_id) or sym_expr
                 buf = render_latex_image(latex_str)
-                await asyncio.to_thread(
-                    bot.send_photo,
-                    chat_id,
-                    photo=buf,
-                    caption=f"📐 **LaTeX:** `{expr}`\n\n**Result:** `{result}`"
-                )
+                await asyncio.to_thread(bot.send_photo, chat_id, photo=buf,
+                                        caption=f"📐 **LaTeX:** `{expr}`\n\n**Result:** `{result}`")
                 add_to_history(chat_id, f"latex({expr})", latex_str)
             except Exception:
                 await asyncio.to_thread(bot.send_message, chat_id, f"❌ Could not render LaTeX for `{expr}`")
 
         # ==================== MAIN CALCULATOR ====================
         else:
-            # First check for natural unit conversion
             unit_result = handle_unit_conversion(text, chat_id)
-            if unit_result is not None:
+            if unit_result:
                 await asyncio.to_thread(bot.send_message, chat_id, unit_result)
                 add_to_history(chat_id, text, unit_result)
             else:
@@ -336,16 +323,18 @@ async def webhook(request: Request):
                     await asyncio.to_thread(
                         bot.send_message,
                         chat_id,
-                        "🤖 **Scientific Calculator Ready!**\n\n"
-                        "Try these:\n"
-                        "`integrate(x**2, x)`\n"
-                        "`diff(cos(x), x)`\n"
-                        "`Matrix([[1,2],[3,4]]).inv()`\n"
+                        "🤖 **Ultimate Calculator Ready!**\n\n"
+                        "Try:\n"
+                        "`1 + 2*I`\n"
+                        "`compound(1000,0.05,10)`\n"
+                        "`emi(500000,0.09/12,240)`\n"
+                        "`mean(1,2,3,4,5)`\n"
+                        "`stdev(10,20,30)`\n"
+                        "`comb(5,2)`\n"
+                        "`integrate(x**2,x)`\n"
                         "`5 km to m`\n"
-                        "`sin(30)` (DEG mode)\n"
-                        "`200 * 5%`\n"
-                        "`/latex x^2 + 3x + 2`\n"
-                        "`/plot sin(x)`"
+                        "`/plot sin(x)`\n"
+                        "`/latex diff(sin(x),x)`"
                     )
 
     except Exception as e:
