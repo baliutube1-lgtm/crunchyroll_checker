@@ -151,16 +151,10 @@ Use:
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🗂 *COMMANDS*
-`/deg` 
-'/rad`
-`/plot`
-'/latex`
-'/py`
-`/history`
-'/vars`
-`/clear`
-`/clearvars`
-`/clearfuncs`
+`/deg` `/rad`
+`/plot` `/latex` `/py`
+`/history` `/vars`
+`/clear` `/clearvars` `/clearfuncs`
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🔥 Try:
