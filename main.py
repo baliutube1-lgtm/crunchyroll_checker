@@ -26,7 +26,21 @@ chat_custom_funcs = {}
 # ================= SMART INPUT =================
 def preprocess_expression(expr: str) -> str:
     expr = expr.lower().strip()
+
+    # sin 30 → sin(30)
     expr = re.sub(r'(sin|cos|tan)\s+(\d+)', r'\1(\2)', expr)
+
+    # 🔥 FIX unicode powers properly
+    superscripts = {
+        "⁰":"^0","¹":"^1","²":"^2","³":"^3","⁴":"^4",
+        "⁵":"^5","⁶":"^6","⁷":"^7","⁸":"^8","⁹":"^9"
+    }
+    for k, v in superscripts.items():
+        expr = expr.replace(k, v)
+
+    # × ÷
+    expr = expr.replace("×", "*").replace("÷", "/")
+
     return expr
 
 # ================= HISTORY =================
@@ -109,7 +123,7 @@ def get_help():
 `tan(45)`
 
 Use:
-`/deg` or `/rad`
+`/deg` `/rad`
 
 ━━━━━━━━━━━━━━━━━━━━━━
 📈 *CALCULUS*
@@ -157,11 +171,11 @@ Use:
 `/clear` `/clearvars` `/clearfuncs`
 
 ━━━━━━━━━━━━━━━━━━━━━━
-🔥 Try:
+🔥 *Try:*
+`2²`
+`4⁴`
 `cos 60`
 `sin(30)`
-`x=5`
-`x^2`
 
 🚀 Enjoy!
 """
