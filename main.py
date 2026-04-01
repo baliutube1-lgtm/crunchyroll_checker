@@ -28,15 +28,16 @@ def add_to_history(chat_id: int, expression: str, result: any):
     if chat_id not in chat_history:
         chat_history[chat_id] = []
     chat_history[chat_id].append({"expr": expression, "result": result})
-    if len(chat_history[chat_id]) > 15:   # increased limit
+    if len(chat_history[chat_id]) > 15:
         chat_history[chat_id].pop(0)
 
 def get_safe_locals(chat_id: int = None):
-    """Safe namespace for sympy with built-in functions + user variables"""
+    """Fixed: log10 now works with sympy"""
     variables = chat_variables.get(chat_id, {}) if chat_id else {}
     return {
         "sin": sp.sin, "cos": sp.cos, "tan": sp.tan,
-        "sqrt": sp.sqrt, "log": sp.log, "log10": sp.log10,
+        "sqrt": sp.sqrt, "log": sp.log,
+        "log10": lambda x: sp.log(x, 10),   # ← FIXED
         "exp": sp.exp, "pi": sp.pi, "e": sp.E,
         "abs": sp.Abs, "factorial": sp.factorial,
         **variables
@@ -54,7 +55,7 @@ def evaluate_expression(expression: str, chat_id: int = None):
         # 1. Variable assignment: x = 5
         if '=' in expr and expr.count('=') == 1:
             left, right = [part.strip() for part in expr.split('=', 1)]
-            if left.isidentifier() and left not in ["sin", "cos", "tan", "sqrt", "log", "exp", "pi", "e", "abs", "factorial"]:
+            if left.isidentifier() and left not in ["sin", "cos", "tan", "sqrt", "log", "log10", "exp", "pi", "e", "abs", "factorial"]:
                 try:
                     val = sp.sympify(right, locals=safe_locals)
                     if chat_id is not None:
@@ -84,17 +85,15 @@ def evaluate_expression(expression: str, chat_id: int = None):
             except:
                 pass
 
-        # 3. Normal expression (numeric or symbolic)
+        # 3. Normal expression
         result = sp.sympify(expr, locals=safe_locals)
 
-        # Try numeric first
         try:
             numeric = result.evalf(12)
             if numeric.is_integer:
                 return int(numeric)
             return round(float(numeric), 8)
         except:
-            # Return simplified symbolic result
             return str(result.simplify() if hasattr(result, "simplify") else result)
 
     except Exception:
@@ -106,7 +105,7 @@ def evaluate_expression(expression: str, chat_id: int = None):
 async def root():
     return {
         "status": "🚀 Advanced Calculator Bot is LIVE",
-        "version": "v3.0 - Symbolic + Variables + Plotting"
+        "version": "v3.1 - BUG FIXED (log10 + stability)"
     }
 
 
@@ -136,12 +135,12 @@ async def webhook(request: Request):
                 bot.send_message,
                 chat_id,
                 f"Hello {name} 👋\n\n"
-                "🚀 **Advanced Calculator Bot v3.0**\n\n"
-                "✅ **New powerful features:**\n"
+                "🚀 **Advanced Calculator Bot v3.1** (fixed!)\n\n"
+                "✅ Now working perfectly:\n"
+                "• `log(100)`, `sqrt(16)`, `cos(pi/2)`\n"
                 "• Variables: `x = 5` then `sin(x)`\n"
-                "• Solve equations: `x^2 - 5x + 6 = 0`\n"
-                "• Plot graphs: `/plot sin(x)`\n"
-                "• Full symbolic math (pi, e, factorial, log, etc.)\n\n"
+                "• Solve: `x^2 - 5x + 6 = 0`\n"
+                "• Plot: `/plot sin(x)`\n\n"
                 "Commands:\n"
                 "`/history` → Last 15 results\n"
                 "`/vars` → Show variables\n"
@@ -178,14 +177,11 @@ async def webhook(request: Request):
                     txt += f"`{v}` = `{val}`\n"
                 await asyncio.to_thread(bot.send_message, chat_id, txt)
 
-        # ==================== PLOT COMMAND ====================
+        # ==================== PLOT ====================
         elif lower_text.startswith("/plot"):
             plot_expr = text[5:].strip()
             if not plot_expr:
-                await asyncio.to_thread(
-                    bot.send_message, chat_id,
-                    "📊 **Usage:** `/plot sin(x)` or `/plot x^2 - 3x + 2`"
-                )
+                await asyncio.to_thread(bot.send_message, chat_id, "📊 **Usage:** `/plot sin(x)` or `/plot x^2 - 3x + 2`")
                 return {"ok": True}
 
             try:
@@ -195,7 +191,7 @@ async def webhook(request: Request):
                 f = sp.lambdify(x_sym, func, 'numpy')
 
                 x_vals = np.linspace(-10, 10, 500)
-                y_vals = np.real(f(x_vals))   # handle complex safely
+                y_vals = np.real(f(x_vals))
 
                 plt.figure(figsize=(10, 6))
                 plt.plot(x_vals, y_vals, color='#00aaff', linewidth=2.5)
@@ -219,22 +215,20 @@ async def webhook(request: Request):
                 )
                 add_to_history(chat_id, f"plot({plot_expr})", "graph generated")
 
-            except Exception as e:
+            except Exception:
                 await asyncio.to_thread(
                     bot.send_message, chat_id,
                     f"❌ Could not plot `{plot_expr}`\nMake sure it's a valid function of `x`."
                 )
 
-        # ==================== MAIN CALCULATOR (Assignment / Solve / Normal) ====================
+        # ==================== MAIN CALCULATOR ====================
         else:
             result = evaluate_expression(text, chat_id)
 
             if result is not None:
                 if isinstance(result, str) and "**Variable set:**" in result:
-                    # Assignment - no history
                     await asyncio.to_thread(bot.send_message, chat_id, result)
                 else:
-                    # Normal calc or solution
                     add_to_history(chat_id, text, result)
                     if isinstance(result, str) and result.startswith("✅ **Solution:**"):
                         display = result
@@ -246,7 +240,7 @@ async def webhook(request: Request):
                     bot.send_message,
                     chat_id,
                     "🤖 Send any math expression:\n"
-                    "`5 + 3`, `sin(pi/2)`, `factorial(10)`, `log(100)`\n\n"
+                    "`5 + 3`, `sin(pi/2)`, `factorial(10)`, `log(100)`, `sqrt(16)`, `cos(pi/2)`\n\n"
                     "Or try:\n"
                     "`x = 5` (set variable)\n"
                     "`x^2 - 5x + 6 = 0` (solve)\n"
