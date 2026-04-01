@@ -1,5 +1,6 @@
-pyTelegramBotAPI
 fastapi
-uvicorn
-requests
-python-dotenv
+uvicorn[standard]
+pyTelegramBotAPI
+sympy
+numpy
+matplotlib
