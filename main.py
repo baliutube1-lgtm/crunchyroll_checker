@@ -8,11 +8,6 @@ from io import BytesIO
 import telebot
 from fastapi import FastAPI, Request
 
-# Units & stats
-import sympy.physics.units as units_mod
-from sympy.physics.units.util import convert_to
-from sympy.stats import Normal, Binomial, density, P
-
 app = FastAPI()
 
 # ================= TOKEN =================
@@ -24,78 +19,24 @@ bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
 # ================= STORAGE =================
 chat_angle_mode = {}
+chat_history = {}
+chat_variables = {}
+chat_custom_funcs = {}
 
-# ================= SMART INPUT FIX =================
+# ================= SMART INPUT =================
 def preprocess_expression(expr: str) -> str:
     expr = expr.lower().strip()
-
-    # sin 30 → sin(30)
     expr = re.sub(r'(sin|cos|tan)\s+(\d+)', r'\1(\2)', expr)
-
     return expr
 
-# ================= HELP MENU =================
-def get_help_message(name: str, mode: str) -> str:
-    return f"""
-👋 Hello {name}!
-
-📘 *Calculator Help Menu*
-
-━━━━━━━━━━━━━━━━━━━━━━
-📐 Mode: `{mode.upper()}`
-━━━━━━━━━━━━━━━━━━━━━━
-
-🧮 *Basic*
-`2+2`, `5^2`, `10/3`
-
-📊 *Advanced*
-`sqrt(16)`
-`log(10)`
-`factorial(5)`
-
-📐 *Trigonometry*
-`sin(30)`
-`cos(60)`
-`tan(45)`
-
-Use:
-`/deg` or `/rad`
-
-━━━━━━━━━━━━━━━━━━━━━━
-📈 *Calculus*
-`diff(x^2,x)`
-`integrate(x^2,x)`
-
-━━━━━━━━━━━━━━━━━━━━━━
-📊 *Statistics*
-`mean(1,2,3)`
-`variance(1,2,3)`
-
-━━━━━━━━━━━━━━━━━━━━━━
-🎲 *Probability*
-`Normal(0,1)`
-`pdf(Normal(0,1),0)`
-
-━━━━━━━━━━━━━━━━━━━━━━
-📏 *Unit Conversion*
-`10 km to m`
-
-━━━━━━━━━━━━━━━━━━━━━━
-📊 *Graph*
-`/plot sin(x)`
-
-━━━━━━━━━━━━━━━━━━━━━━
-🐍 *Python*
-`/py 2**10`
-
-━━━━━━━━━━━━━━━━━━━━━━
-
-✅ Easy to use  
-🔥 Try natural typing like: `cos 60`, `sin 30`
-"""
+# ================= HISTORY =================
+def add_history(chat_id, expr, result):
+    chat_history.setdefault(chat_id, []).append((expr, result))
+    if len(chat_history[chat_id]) > 30:
+        chat_history[chat_id].pop(0)
 
 # ================= SAFE LOCALS =================
-def get_safe_locals(chat_id=None):
+def get_safe_locals(chat_id):
     mode = chat_angle_mode.get(chat_id, "rad")
 
     if mode == "deg":
@@ -108,7 +49,7 @@ def get_safe_locals(chat_id=None):
         trig = {
             "sin": sp.sin,
             "cos": sp.cos,
-            "tan": sp.tan,
+            "tan": sp.tan
         }
 
     return {
@@ -121,35 +62,120 @@ def get_safe_locals(chat_id=None):
         "factorial": sp.factorial,
         "diff": sp.diff,
         "integrate": sp.integrate,
-        "mean": lambda *x: float(np.mean(x)),
-        "variance": lambda *x: float(np.var(x)),
-        "Normal": Normal,
-        "Binomial": Binomial,
-        "pdf": lambda d, x: float(density(d)(x).doit()),
-        "cdf": lambda d, x: float(P(d <= x)),
-        "convert_to": convert_to,
-        "m": units_mod.meter,
-        "km": units_mod.kilometer,
+        "Matrix": sp.Matrix,
+        "abs": sp.Abs,
+        **chat_variables.get(chat_id, {})
     }
 
-# ================= EVALUATOR =================
+# ================= EVALUATE =================
 def evaluate(expr, chat_id):
     expr = preprocess_expression(expr)
     expr = expr.replace("^", "**")
 
-    if not re.match(r"^[\d+\-*/().\s^,a-zA-Z0-9_=,%[\]]+$", expr):
-        return None
+    safe = get_safe_locals(chat_id)
+
+    # Variable assignment
+    if "=" in expr and expr.count("=") == 1:
+        left, right = expr.split("=")
+        if left.strip().isidentifier():
+            val = sp.sympify(right, locals=safe)
+            chat_variables.setdefault(chat_id, {})[left.strip()] = val
+            return f"📌 `{left.strip()}` = `{val}`"
 
     try:
-        res = sp.sympify(expr, locals=get_safe_locals(chat_id))
+        res = sp.sympify(expr, locals=safe)
         return float(res.evalf())
     except:
         return None
 
+# ================= HELP MENU =================
+def get_help():
+    return """
+📘 *ULTIMATE CALCULATOR HELP*
+
+━━━━━━━━━━━━━━━━━━━━━━
+🧮 *BASIC*
+`2+2`, `5^2`, `10/3`
+
+📊 *ADVANCED*
+`sqrt(16)`
+`log(10)`
+`factorial(5)`
+
+━━━━━━━━━━━━━━━━━━━━━━
+📐 *TRIGONOMETRY*
+`sin(30)`
+`cos 60`
+`tan(45)`
+
+Use:
+`/deg` or `/rad`
+
+━━━━━━━━━━━━━━━━━━━━━━
+📈 *CALCULUS*
+`diff(x^2,x)`
+`integrate(x^2,x)`
+
+━━━━━━━━━━━━━━━━━━━━━━
+📦 *MATRIX*
+`Matrix([[1,2],[3,4]])`
+
+━━━━━━━━━━━━━━━━━━━━━━
+📊 *STATISTICS*
+`mean(1,2,3)`
+`variance(1,2,3)`
+
+━━━━━━━━━━━━━━━━━━━━━━
+🎲 *PROBABILITY*
+`Normal(0,1)`
+`pdf(Normal(0,1),0)`
+
+━━━━━━━━━━━━━━━━━━━━━━
+📏 *UNIT*
+`10 km to m`
+
+━━━━━━━━━━━━━━━━━━━━━━
+📊 *GRAPH*
+`/plot sin(x)`
+
+📐 *LATEX*
+`/latex diff(x^2,x)`
+
+🐍 *PYTHON*
+`/py 2**10`
+
+━━━━━━━━━━━━━━━━━━━━━━
+📂 *MEMORY*
+`x=10`
+`x+5`
+
+━━━━━━━━━━━━━━━━━━━━━━
+🗂 *COMMANDS*
+`/deg` 
+'/rad`
+`/plot`
+'/latex`
+'/py`
+`/history`
+'/vars`
+`/clear`
+`/clearvars`
+`/clearfuncs`
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔥 Try:
+`cos 60`
+`sin(30)`
+`x=5`
+`x^2`
+
+🚀 Enjoy!
+"""
+
 # ================= ROOT =================
 @app.get("/")
 async def root():
-    return {"status": "Bot is live 🚀"}
+    return {"status": "LIVE 🚀"}
 
 # ================= WEBHOOK =================
 @app.post("/webhook")
@@ -162,10 +188,6 @@ async def webhook(request: Request):
     msg = data["message"]
     chat_id = msg["chat"]["id"]
     text = msg.get("text", "").strip()
-
-    if not text:
-        return {"ok": True}
-
     lower = text.lower()
 
     # ===== START =====
@@ -181,17 +203,9 @@ async def webhook(request: Request):
 
     # ===== HELP =====
     elif lower == "/help":
-        user = msg.get("from", {})
-        name = user.get("first_name", "User")
-        mode = chat_angle_mode.get(chat_id, "rad")
+        await asyncio.to_thread(bot.send_message, chat_id, get_help())
 
-        await asyncio.to_thread(
-            bot.send_message,
-            chat_id,
-            get_help_message(name, mode)
-        )
-
-    # ===== DEG/RAD =====
+    # ===== MODES =====
     elif lower == "/deg":
         chat_angle_mode[chat_id] = "deg"
         await asyncio.to_thread(bot.send_message, chat_id, "📐 Degree mode ON")
@@ -200,16 +214,38 @@ async def webhook(request: Request):
         chat_angle_mode[chat_id] = "rad"
         await asyncio.to_thread(bot.send_message, chat_id, "📐 Radian mode ON")
 
+    # ===== HISTORY =====
+    elif lower == "/history":
+        hist = chat_history.get(chat_id, [])
+        txt = "📜 History empty" if not hist else "\n".join(f"`{e}` = {r}" for e, r in hist)
+        await asyncio.to_thread(bot.send_message, chat_id, txt)
+
+    elif lower == "/clear":
+        chat_history[chat_id] = []
+        await asyncio.to_thread(bot.send_message, chat_id, "🗑 History cleared")
+
+    # ===== VARIABLES =====
+    elif lower == "/vars":
+        vars_ = chat_variables.get(chat_id, {})
+        txt = "📌 No variables" if not vars_ else "\n".join(f"{k} = {v}" for k, v in vars_.items())
+        await asyncio.to_thread(bot.send_message, chat_id, txt)
+
+    elif lower == "/clearvars":
+        chat_variables[chat_id] = {}
+        await asyncio.to_thread(bot.send_message, chat_id, "🗑 Variables cleared")
+
+    elif lower == "/clearfuncs":
+        chat_custom_funcs[chat_id] = {}
+        await asyncio.to_thread(bot.send_message, chat_id, "🗑 Functions cleared")
+
     # ===== PLOT =====
     elif lower.startswith("/plot"):
         expr = preprocess_expression(text[5:].strip())
         try:
             x = sp.symbols('x')
             f = sp.lambdify(x, sp.sympify(expr), 'numpy')
-
             xs = np.linspace(-10, 10, 500)
-            ys = f(xs)
-            ys = np.where(np.isfinite(ys), ys, np.nan)
+            ys = np.where(np.isfinite(f(xs)), f(xs), np.nan)
 
             plt.plot(xs, ys)
             buf = BytesIO()
@@ -221,11 +257,21 @@ async def webhook(request: Request):
         except:
             await asyncio.to_thread(bot.send_message, chat_id, "❌ Plot error")
 
-    # ===== PYTHON =====
+    # ===== LATEX =====
+    elif lower.startswith("/latex"):
+        expr = preprocess_expression(text[6:].strip())
+        try:
+            sym = sp.sympify(expr)
+            latex = sp.latex(sym)
+            await asyncio.to_thread(bot.send_message, chat_id, f"📐 `{latex}`")
+        except:
+            await asyncio.to_thread(bot.send_message, chat_id, "❌ LaTeX error")
+
+    # ===== PY =====
     elif lower.startswith("/py"):
         code = text[3:].strip()
         if "import" in code or "__" in code:
-            await asyncio.to_thread(bot.send_message, chat_id, "❌ Unsafe code")
+            await asyncio.to_thread(bot.send_message, chat_id, "❌ Unsafe")
         else:
             try:
                 res = eval(code, {"__builtins__": {}}, {})
@@ -237,6 +283,7 @@ async def webhook(request: Request):
     else:
         result = evaluate(text, chat_id)
         if result is not None:
+            add_history(chat_id, text, result)
             await asyncio.to_thread(bot.send_message, chat_id, f"✅ `{result}`")
         else:
             await asyncio.to_thread(bot.send_message, chat_id, "❌ Invalid input")
