@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 import telebot
 from fastapi import FastAPI, Request
-import signal
 
 # Units & stats
 import sympy.physics.units as units_mod
@@ -29,169 +28,137 @@ chat_variables = {}
 chat_angle_mode = {}
 chat_custom_funcs = {}
 
-MAX_HISTORY = 30
-MAX_CHATS = 1000
+# ================= HELP MENU =================
+def get_help_message(name: str, mode: str) -> str:
+    return f"""
+👋 Hello {name}!
 
-# ================= TIMEOUT =================
-def timeout_handler(signum, frame):
-    raise TimeoutError()
+🚀 *ULTIMATE SCIENTIFIC CALCULATOR*
 
-signal.signal(signal.SIGALRM, timeout_handler)
+━━━━━━━━━━━━━━━━━━━━━━
+📐 *Angle Mode:* `{mode.upper()}`
+━━━━━━━━━━━━━━━━━━━━━━
 
-# ================= HELPERS =================
-def add_to_history(chat_id, expr, result):
-    if chat_id not in chat_history:
-        chat_history[chat_id] = []
-    chat_history[chat_id].append({"expr": expr, "result": result})
-    if len(chat_history[chat_id]) > MAX_HISTORY:
-        chat_history[chat_id].pop(0)
+🧮 *BASIC*
+`2+2`, `5^2`, `10/3`
 
-def get_angle_mode(chat_id):
-    return chat_angle_mode.get(chat_id, "rad")
+📊 *ADVANCED*
+`sqrt(16)`, `log(10)`, `factorial(5)`
 
-def create_trig(mode):
-    if mode == "rad":
-        return {"sin": sp.sin, "cos": sp.cos, "tan": sp.tan,
-                "asin": sp.asin, "acos": sp.acos, "atan": sp.atan}
-    return {
-        "sin": lambda x: sp.sin(sp.rad(x)),
-        "cos": lambda x: sp.cos(sp.rad(x)),
-        "tan": lambda x: sp.tan(sp.rad(x)),
-        "asin": lambda x: sp.deg(sp.asin(x)),
-        "acos": lambda x: sp.deg(sp.acos(x)),
-        "atan": lambda x: sp.deg(sp.atan(x)),
-    }
+📐 *TRIG*
+`sin(30)`, `cos(60)`
 
-def make_func(expr, args):
-    return lambda *vals: float(expr.subs(dict(zip(args, vals))).evalf())
+`/deg` `/rad`
 
+━━━━━━━━━━━━━━━━━━━━━━
+📈 *CALCULUS*
+`diff(x^2,x)`
+`integrate(x^2,x)`
+
+📦 *MATRIX*
+`Matrix([[1,2],[3,4]])`
+
+🔢 *COMBINATORICS*
+`comb(5,2)` `perm(5,2)`
+
+📊 *STATS*
+`mean(1,2,3)`
+`variance(1,2,3)`
+
+🎲 *PROBABILITY*
+`Normal(0,1)`
+`pdf(Normal(0,1),0)`
+
+💰 *FINANCE*
+`compound(1000,0.1,2)`
+`emi(10000,0.1,12)`
+
+📏 *UNITS*
+`10 km to m`
+
+📊 *GRAPH*
+`/plot sin(x)`
+
+📐 *LATEX*
+`/latex diff(x^2,x)`
+
+⚙️ *FUNCTIONS*
+`f(x)=x^2`
+`f(5)`
+
+🧩 *SYSTEM*
+`x+y=5,2x-y=1`
+
+🐍 *PYTHON*
+`/py 2**10`
+
+━━━━━━━━━━━━━━━━━━━━━━
+📂 *MEMORY*
+`x=10` → `x+5`
+
+━━━━━━━━━━━━━━━━━━━━━━
+🗂 *COMMANDS*
+`/history`
+`/vars`
+`/clear`
+`/clearvars`
+`/clearfuncs`
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔥 Try:
+`f(x)=x^2`
+`f(10)`
+`/plot x^2`
+
+🚀 Enjoy!
+"""
+
+# ================= SAFE LOCALS =================
 def get_safe_locals(chat_id=None):
-    mode = get_angle_mode(chat_id)
-    variables = chat_variables.get(chat_id, {})
-    trig = create_trig(mode)
-    custom = chat_custom_funcs.get(chat_id, {})
-
-    stats = {
-        "mean": lambda *x: float(np.mean(x)),
-        "median": lambda *x: float(np.median(x)),
-        "stdev": lambda *x: float(np.std(x)),
-        "variance": lambda *x: float(np.var(x)),
-        "Normal": Normal,
-        "Binomial": Binomial,
-        "pdf": lambda d, x: float(density(d)(x).doit()),
-        "cdf": lambda d, x: float(P(d <= x)),
-        "expect": lambda d: float(stats_E(d)),
-        "var": lambda d: float(stats_var(d)),
-    }
-
-    finance = {
-        "compound": lambda p, r, t, n=1: p * (1 + r/n)**(n*t),
-        "simple_interest": lambda p, r, t: p*r*t,
-        "emi": lambda p, r, n: p*r*(1+r)**n/((1+r)**n-1) if r != 0 else p/n,
-        "fv": lambda p, r, n: p*(1+r)**n,
-    }
-
-    unit_dict = {
-        "m": units_mod.meter,
-        "km": units_mod.kilometer,
-        "cm": units_mod.centimeter,
-        "kg": units_mod.kilogram,
-        "g": units_mod.gram,
-        "s": units_mod.second,
-    }
-
-    safe = {
-        **trig,
+    return {
+        "sin": sp.sin, "cos": sp.cos, "tan": sp.tan,
         "sqrt": sp.sqrt,
         "log": sp.log,
         "exp": sp.exp,
         "pi": sp.pi,
         "e": sp.E,
-        "abs": sp.Abs,
         "factorial": sp.factorial,
-        "integrate": sp.integrate,
+        "abs": sp.Abs,
         "diff": sp.diff,
+        "integrate": sp.integrate,
         "Matrix": sp.Matrix,
         "comb": sp.binomial,
         "perm": lambda n, k: sp.factorial(n)/sp.factorial(n-k),
+        "mean": lambda *x: float(np.mean(x)),
+        "variance": lambda *x: float(np.var(x)),
+        "Normal": Normal,
+        "Binomial": Binomial,
+        "pdf": lambda d, x: float(density(d)(x).doit()),
+        "cdf": lambda d, x: float(P(d <= x)),
         "convert_to": convert_to,
-        **stats,
-        **finance,
-        **unit_dict,
-        **variables
+        "m": units_mod.meter,
+        "km": units_mod.kilometer,
+        "kg": units_mod.kilogram,
+        "g": units_mod.gram,
     }
 
-    for name, (expr, args) in custom.items():
-        safe[name] = make_func(expr, args)
-
-    return safe
-
-# ================= CUSTOM FUNCTION =================
-def handle_function(text, chat_id):
-    match = re.match(r'^\s*(?:def\s+)?(\w+)\((.*?)\)\s*=\s*(.+)$', text)
-    if not match:
-        return None
-    name, args, body = match.groups()
-    args = [a.strip() for a in args.split(",")]
-
-    try:
-        expr = sp.sympify(body.replace("^", "**"), locals=get_safe_locals(chat_id))
-        chat_custom_funcs.setdefault(chat_id, {})[name] = (expr, args)
-        return f"✅ Function `{name}` defined"
-    except:
-        return None
-
-# ================= SYSTEM =================
-def handle_system(text, chat_id):
-    if "," not in text or "=" not in text:
-        return None
-    try:
-        eqs = []
-        for eq in text.split(","):
-            l, r = eq.split("=")
-            eqs.append(sp.Eq(sp.sympify(l), sp.sympify(r)))
-        sol = sp.solve(eqs)
-        return f"✅ {sol}"
-    except:
-        return None
-
-# ================= UNIT =================
-def handle_unit(text, chat_id):
-    if " to " not in text:
-        return None
-    try:
-        a, b = text.split(" to ")
-        qty = sp.sympify(a, locals=get_safe_locals(chat_id))
-        unit = get_safe_locals(chat_id).get(b.strip())
-        return f"✅ {convert_to(qty, unit)}"
-    except:
-        return None
-
-# ================= EVAL =================
+# ================= EVALUATOR =================
 def evaluate(expr, chat_id):
     expr = expr.replace("^", "**")
 
     if not re.match(r"^[\d+\-*/().\s^,a-zA-Z0-9_=,%[\]]+$", expr):
         return None
 
-    safe = get_safe_locals(chat_id)
-
     try:
-        signal.alarm(2)
-        res = sp.sympify(expr, locals=safe)
-        signal.alarm(0)
-    except:
-        return None
-
-    try:
+        res = sp.sympify(expr, locals=get_safe_locals(chat_id))
         return float(res.evalf())
     except:
-        return str(res)
+        return None
 
 # ================= ROOT =================
 @app.get("/")
 async def root():
-    return {"status": "LIVE 🔥"}
+    return {"status": "BOT LIVE 🚀"}
 
 # ================= WEBHOOK =================
 @app.post("/webhook")
@@ -210,31 +177,52 @@ async def webhook(request: Request):
 
     lower = text.lower()
 
-    # ===== COMMANDS =====
-    if lower == "/start":
-        await asyncio.to_thread(bot.send_message, chat_id, "🚀 Ultimate Calculator v8 Ready!")
+    # ===== HELP MENU =====
+    if lower in ["/start", "/help"]:
+        user = msg.get("from", {})
+        name = f"@{user.get('username')}" if user.get("username") else user.get("first_name", "there")
+        mode = chat_angle_mode.get(chat_id, "rad")
 
+        await asyncio.to_thread(
+            bot.send_message,
+            chat_id,
+            get_help_message(name, mode)
+        )
+
+    # ===== DEG/RAD =====
+    elif lower == "/deg":
+        chat_angle_mode[chat_id] = "deg"
+        await asyncio.to_thread(bot.send_message, chat_id, "📐 Degree mode ON")
+
+    elif lower == "/rad":
+        chat_angle_mode[chat_id] = "rad"
+        await asyncio.to_thread(bot.send_message, chat_id, "📐 Radian mode ON")
+
+    # ===== PLOT =====
     elif lower.startswith("/plot"):
         expr = text[5:].strip()
-        x = sp.symbols('x')
-        f = sp.lambdify(x, sp.sympify(expr), 'numpy')
+        try:
+            x = sp.symbols('x')
+            f = sp.lambdify(x, sp.sympify(expr), 'numpy')
+            xs = np.linspace(-10, 10, 500)
+            ys = f(xs)
+            ys = np.where(np.isfinite(ys), ys, np.nan)
 
-        xs = np.linspace(-10, 10, 500)
-        ys = f(xs)
-        ys = np.where(np.isfinite(ys), ys, np.nan)
+            plt.plot(xs, ys)
+            buf = BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            plt.close()
 
-        plt.plot(xs, ys)
-        buf = BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        plt.close()
+            await asyncio.to_thread(bot.send_photo, chat_id, buf)
+        except:
+            await asyncio.to_thread(bot.send_message, chat_id, "❌ Plot error")
 
-        await asyncio.to_thread(bot.send_photo, chat_id, buf)
-
+    # ===== PYTHON =====
     elif lower.startswith("/py"):
         code = text[3:].strip()
         if "import" in code or "__" in code:
-            await asyncio.to_thread(bot.send_message, chat_id, "❌ Unsafe code")
+            await asyncio.to_thread(bot.send_message, chat_id, "❌ Unsafe")
         else:
             try:
                 res = eval(code, {"__builtins__": {}}, {})
@@ -242,17 +230,11 @@ async def webhook(request: Request):
             except:
                 await asyncio.to_thread(bot.send_message, chat_id, "❌ Error")
 
+    # ===== NORMAL CALC =====
     else:
-        # priority handlers
-        for handler in [handle_function, handle_system, handle_unit]:
-            result = handler(text, chat_id)
-            if result:
-                await asyncio.to_thread(bot.send_message, chat_id, result)
-                return {"ok": True}
-
         result = evaluate(text, chat_id)
         if result is not None:
-            await asyncio.to_thread(bot.send_message, chat_id, f"✅ {result}")
+            await asyncio.to_thread(bot.send_message, chat_id, f"✅ `{result}`")
         else:
             await asyncio.to_thread(bot.send_message, chat_id, "❌ Invalid input")
 
