@@ -8,6 +8,10 @@ from io import BytesIO
 import telebot
 from fastapi import FastAPI, Request
 
+# SymPy units for conversion
+import sympy.physics.units as units_mod
+from sympy.physics.units.util import convert_to
+
 app = FastAPI()
 
 # ====================== BOT TOKEN ======================
@@ -33,35 +37,41 @@ def add_to_history(chat_id: int, expression: str, result: any):
         chat_history[chat_id].pop(0)
 
 def get_angle_mode(chat_id: int) -> str:
-    return chat_angle_mode.get(chat_id, "rad")  # default = radians
+    return chat_angle_mode.get(chat_id, "rad")
 
 def create_trig_functions(mode: str):
-    """DEG/RAD aware trig functions (scientific calculator style)"""
     if mode == "rad":
-        return {
-            "sin": sp.sin, "cos": sp.cos, "tan": sp.tan,
-            "asin": sp.asin, "acos": sp.acos, "atan": sp.atan,
-        }
-    else:  # degrees
-        return {
-            "sin": lambda x: sp.sin(sp.rad(x)),
-            "cos": lambda x: sp.cos(sp.rad(x)),
-            "tan": lambda x: sp.tan(sp.rad(x)),
-            "asin": lambda x: sp.deg(sp.asin(x)),
-            "acos": lambda x: sp.deg(sp.acos(x)),
-            "atan": lambda x: sp.deg(sp.atan(x)),
-        }
+        return {"sin": sp.sin, "cos": sp.cos, "tan": sp.tan,
+                "asin": sp.asin, "acos": sp.acos, "atan": sp.atan}
+    else:
+        return {"sin": lambda x: sp.sin(sp.rad(x)),
+                "cos": lambda x: sp.cos(sp.rad(x)),
+                "tan": lambda x: sp.tan(sp.rad(x)),
+                "asin": lambda x: sp.deg(sp.asin(x)),
+                "acos": lambda x: sp.deg(sp.acos(x)),
+                "atan": lambda x: sp.deg(sp.atan(x))}
 
 def get_safe_locals(chat_id: int = None):
     mode = get_angle_mode(chat_id) if chat_id is not None else "rad"
     variables = chat_variables.get(chat_id, {}) if chat_id else {}
     trig = create_trig_functions(mode)
 
-    protected = {
-        "sin", "cos", "tan", "asin", "acos", "atan",
-        "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-        "sqrt", "log", "log10", "exp", "abs", "factorial",
-        "floor", "ceil", "mod", "rad", "deg", "pi", "e"
+    unit_dict = {
+        "m": units_mod.meter, "meter": units_mod.meter,
+        "km": units_mod.kilometer, "kilometer": units_mod.kilometer,
+        "cm": units_mod.centimeter, "centimeter": units_mod.centimeter,
+        "mm": units_mod.millimeter, "millimeter": units_mod.millimeter,
+        "mile": units_mod.mile,
+        "yard": units_mod.yard,
+        "ft": units_mod.foot, "foot": units_mod.foot,
+        "inch": units_mod.inch,
+        "kg": units_mod.kilogram, "kilogram": units_mod.kilogram,
+        "g": units_mod.gram, "gram": units_mod.gram,
+        "s": units_mod.second, "second": units_mod.second,
+        "min": units_mod.minute, "minute": units_mod.minute,
+        "h": units_mod.hour, "hour": units_mod.hour,
+        "joule": units_mod.joule,
+        "watt": units_mod.watt,
     }
 
     return {
@@ -69,38 +79,73 @@ def get_safe_locals(chat_id: int = None):
         "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh,
         "asinh": sp.asinh, "acosh": sp.acosh, "atanh": sp.atanh,
         "sqrt": sp.sqrt,
-        "log": sp.log,           # natural log (ln)
-        "log10": lambda x: sp.log(x, 10),
+        "log": sp.log, "log10": lambda x: sp.log(x, 10),
         "exp": sp.exp,
-        "pi": sp.pi,
-        "e": sp.E,
+        "pi": sp.pi, "e": sp.E,
         "abs": sp.Abs,
         "factorial": sp.factorial,
         "floor": sp.floor,
         "ceil": sp.ceiling,
-        "mod": sp.Mod,           # use mod(x, y)
+        "mod": sp.Mod,
         "rad": sp.rad,
         "deg": sp.deg,
+        "integrate": sp.integrate,
+        "diff": sp.diff,
+        "Matrix": sp.Matrix,
+        "convert_to": convert_to,
+        **unit_dict,
         **variables
     }
+
+# ====================== UNIT CONVERSION HELPER ======================
+def handle_unit_conversion(text: str, chat_id: int = None):
+    lower = text.lower().strip()
+    if " to " not in lower and " in " not in lower:
+        return None
+    normalized = lower.replace(" in ", " to ").replace("convert ", "").strip()
+    if " to " not in normalized:
+        return None
+    try:
+        from_part, to_part = [p.strip() for p in normalized.split(" to ", 1)]
+        safe_locals = get_safe_locals(chat_id)
+        qty = sp.sympify(from_part, locals=safe_locals)
+        to_unit = safe_locals.get(to_part)
+        if to_unit is None:
+            return None
+        converted = convert_to(qty, to_unit)
+        return f"✅ **Unit conversion:** `{qty}` = `{converted}`"
+    except Exception:
+        return None
+
+# ====================== LaTeX RENDERER ======================
+def render_latex_image(latex_str: str) -> BytesIO:
+    plt.rcParams['mathtext.fontset'] = 'cm'
+    fig = plt.figure(figsize=(max(6, len(latex_str) // 8 + 1), 1.5))
+    plt.text(0.5, 0.5, f"\( {latex_str} \)", fontsize=24, ha='center', va='center')
+    plt.axis('off')
+    buf = BytesIO()
+    plt.savefig(buf, format='png', dpi=300, bbox_inches='tight', transparent=True, pad_inches=0.2)
+    buf.seek(0)
+    plt.close(fig)
+    return buf
 
 # ====================== ULTRA SCIENTIFIC EVALUATOR ======================
 def evaluate_expression(expression: str, chat_id: int = None):
     try:
         expr = expression.strip().replace("^", "**")
-
-        # Support percent like real scientific calculators (200 * 5% = 10)
         expr = re.sub(r'(\d+\.?\d*)\s*%', r'(\1/100)', expr)
-
-        if not re.match(r"^[\d+\-*/().\s^,a-zA-Z=%]+$", expr):
+        if not re.match(r"^[\d+\-*/().\s^,a-zA-Z=%[\],]+$", expr):
             return None
 
         safe_locals = get_safe_locals(chat_id)
 
-        # 1. Variable assignment: x = 5
+        # Variable assignment
         if '=' in expr and expr.count('=') == 1:
             left, right = [part.strip() for part in expr.split('=', 1)]
-            if left.isidentifier() and left.lower() not in {p.lower() for p in safe_locals if p not in variables}:
+            protected = {"sin","cos","tan","asin","acos","atan","sinh","cosh","tanh","asinh","acosh","atanh",
+                         "sqrt","log","log10","exp","pi","e","abs","factorial","floor","ceil","mod","rad","deg",
+                         "integrate","diff","Matrix","convert_to"}
+            if left.isidentifier() and left not in protected:
                 try:
                     val = sp.sympify(right, locals=safe_locals)
                     if chat_id is not None:
@@ -111,12 +156,11 @@ def evaluate_expression(expression: str, chat_id: int = None):
                 except:
                     pass
 
-        # 2. Equation solving: x^2 - 5x + 6 = 0
+        # Equation solving
         if '=' in expr and expr.count('=') == 1:
             try:
                 left, right = [part.strip() for part in expr.split('=', 1)]
-                eq = sp.Eq(sp.sympify(left, locals=safe_locals),
-                           sp.sympify(right, locals=safe_locals))
+                eq = sp.Eq(sp.sympify(left, locals=safe_locals), sp.sympify(right, locals=safe_locals))
                 free_syms = list(eq.free_symbols)
                 if len(free_syms) == 1:
                     sol = sp.solve(eq, free_syms[0])
@@ -125,7 +169,7 @@ def evaluate_expression(expression: str, chat_id: int = None):
             except:
                 pass
 
-        # 3. Normal expression
+        # Normal evaluation
         result = sp.sympify(expr, locals=safe_locals)
         try:
             numeric = result.evalf(12)
@@ -134,7 +178,6 @@ def evaluate_expression(expression: str, chat_id: int = None):
             return round(float(numeric), 8)
         except:
             return str(result.simplify() if hasattr(result, "simplify") else result)
-
     except Exception:
         return None
 
@@ -142,7 +185,7 @@ def evaluate_expression(expression: str, chat_id: int = None):
 # ====================== ROOT ======================
 @app.get("/")
 async def root():
-    return {"status": "🚀 Full Scientific Calculator Bot LIVE", "version": "v4.0"}
+    return {"status": "🚀 Full Scientific Calculator Bot LIVE", "version": "v5.0 - Matrices + Integrals + Derivatives + Units + LaTeX"}
 
 
 # ====================== WEBHOOK ======================
@@ -171,22 +214,18 @@ async def webhook(request: Request):
                 bot.send_message,
                 chat_id,
                 f"Hello {name} 👋\n\n"
-                "🚀 **Full Scientific Calculator v4.0**\n\n"
-                f"📐 Current angle mode: **{mode}**\n\n"
-                "✅ **Everything a scientific calculator has:**\n"
-                "• sin/cos/tan + inverses (DEG/RAD)\n"
-                "• sinh/cosh/tanh + inverses\n"
-                "• log / log10 / ln / exp / sqrt / !\n"
-                "• floor, ceil, mod(x,y)\n"
-                "• Percent: `200 * 5%` → `10`\n"
-                "• Variables: `x = 5`\n"
-                "• Solve: `x^2 - 5x + 6 = 0`\n"
-                "• Plot: `/plot sin(x)`\n\n"
+                "🚀 **Scientific Calculator v5.0** — Everything you asked for!\n\n"
+                f"📐 Angle mode: **{mode}**\n\n"
+                "✅ **New powerful tools:**\n"
+                "• `integrate(x**2, x)`  (indefinite)\n"
+                "• `integrate(x**2, (x,0,1))`  (definite)\n"
+                "• `diff(sin(x), x)`\n"
+                "• Matrices: `Matrix([[1,2],[3,4]]).inv()` or `.det()`\n"
+                "• Units: `5 km to m` or `1000 g to kg`\n"
+                "• LaTeX: `/latex integrate(x^2, x)`\n\n"
                 "Commands:\n"
-                "`/deg` → Degrees mode\n"
-                "`/rad` → Radians mode\n"
-                "`/history` / `/vars` / `/clear` / `/clearvars`\n"
-                "`/help` → This message"
+                "`/deg` `/rad` `/plot` `/history` `/vars` `/clear` `/clearvars` `/latex`\n"
+                "`/help` → Full list"
             )
 
         elif lower_text == "/deg":
@@ -225,27 +264,24 @@ async def webhook(request: Request):
                     txt += f"`{v}` = `{val}`\n"
                 await asyncio.to_thread(bot.send_message, chat_id, txt)
 
-        # ==================== PLOT (always radians for simplicity) ====================
+        # ==================== PLOT ====================
         elif lower_text.startswith("/plot"):
+            # (same as v4.0 - unchanged for brevity, full code kept in previous version)
             plot_expr = text[5:].strip()
             if not plot_expr:
-                await asyncio.to_thread(bot.send_message, chat_id, "📊 Usage: `/plot sin(x)` or `/plot x^2 - 3x + 2`")
+                await asyncio.to_thread(bot.send_message, chat_id, "📊 Usage: `/plot sin(x)`")
                 return {"ok": True}
-
             try:
                 safe_locals = get_safe_locals(chat_id)
                 x_sym = sp.symbols('x')
                 func = sp.sympify(plot_expr.replace("^", "**"), locals=safe_locals)
                 f = sp.lambdify(x_sym, func, 'numpy')
-
                 x_vals = np.linspace(-10, 10, 500)
                 y_vals = np.real(f(x_vals))
-
                 plt.figure(figsize=(10, 6))
                 plt.plot(x_vals, y_vals, color='#00aaff', linewidth=2.5)
-                plt.title(f"📈 Plot of {plot_expr}")
-                plt.xlabel("x")
-                plt.ylabel("f(x)")
+                plt.title(f"📈 {plot_expr}")
+                plt.xlabel("x"); plt.ylabel("f(x)")
                 plt.grid(True, alpha=0.3)
                 plt.axhline(0, color='black', lw=0.8)
                 plt.axvline(0, color='black', lw=0.8)
@@ -253,45 +289,64 @@ async def webhook(request: Request):
                 plt.savefig(buf, format='png', dpi=220, bbox_inches='tight')
                 buf.seek(0)
                 plt.close()
-
-                await asyncio.to_thread(
-                    bot.send_photo,
-                    chat_id,
-                    photo=buf,
-                    caption=f"✅ Plotted: `{plot_expr}`\n(x from -10 to 10)"
-                )
+                await asyncio.to_thread(bot.send_photo, chat_id, photo=buf, caption=f"✅ Plotted: `{plot_expr}`")
                 add_to_history(chat_id, f"plot({plot_expr})", "graph")
             except Exception:
                 await asyncio.to_thread(bot.send_message, chat_id, f"❌ Could not plot `{plot_expr}`")
 
+        # ==================== LaTeX RENDERING ====================
+        elif lower_text.startswith("/latex"):
+            expr = text[6:].strip()
+            if not expr:
+                await asyncio.to_thread(bot.send_message, chat_id, "📐 Usage: `/latex integrate(x^2, x)` or any expression")
+                return {"ok": True}
+            try:
+                safe = get_safe_locals(chat_id)
+                sym_expr = sp.sympify(expr.replace("^", "**"), locals=safe)
+                latex_str = sp.latex(sym_expr)
+                result = evaluate_expression(expr, chat_id) or sym_expr
+                buf = render_latex_image(latex_str)
+                await asyncio.to_thread(
+                    bot.send_photo,
+                    chat_id,
+                    photo=buf,
+                    caption=f"📐 **LaTeX:** `{expr}`\n\n**Result:** `{result}`"
+                )
+                add_to_history(chat_id, f"latex({expr})", latex_str)
+            except Exception:
+                await asyncio.to_thread(bot.send_message, chat_id, f"❌ Could not render LaTeX for `{expr}`")
+
         # ==================== MAIN CALCULATOR ====================
         else:
-            result = evaluate_expression(text, chat_id)
-
-            if result is not None:
-                if isinstance(result, str) and "**Variable set:**" in result:
-                    await asyncio.to_thread(bot.send_message, chat_id, result)
-                else:
-                    add_to_history(chat_id, text, result)
-                    display = result if isinstance(result, str) and result.startswith("✅ **Solution:**") else f"✅ **Result:** `{result}`"
-                    await asyncio.to_thread(bot.send_message, chat_id, display)
+            # First check for natural unit conversion
+            unit_result = handle_unit_conversion(text, chat_id)
+            if unit_result is not None:
+                await asyncio.to_thread(bot.send_message, chat_id, unit_result)
+                add_to_history(chat_id, text, unit_result)
             else:
-                await asyncio.to_thread(
-                    bot.send_message,
-                    chat_id,
-                    "🤖 **Scientific Calculator Ready!**\n\n"
-                    "Examples:\n"
-                    "`sin(30)` (in DEG mode)\n"
-                    "`cos(pi/2)`\n"
-                    "`200 * 5%`\n"
-                    "`asin(0.5)`\n"
-                    "`sinh(1)`\n"
-                    "`floor(3.7)`\n"
-                    "`mod(10,3)`\n"
-                    "`x = 5` then `x^2`\n"
-                    "`x^2 - 5x + 6 = 0`\n"
-                    "`/plot sin(x)`"
-                )
+                result = evaluate_expression(text, chat_id)
+                if result is not None:
+                    if isinstance(result, str) and "**Variable set:**" in result:
+                        await asyncio.to_thread(bot.send_message, chat_id, result)
+                    else:
+                        add_to_history(chat_id, text, result)
+                        display = result if isinstance(result, str) and result.startswith("✅ **Solution:**") else f"✅ **Result:** `{result}`"
+                        await asyncio.to_thread(bot.send_message, chat_id, display)
+                else:
+                    await asyncio.to_thread(
+                        bot.send_message,
+                        chat_id,
+                        "🤖 **Scientific Calculator Ready!**\n\n"
+                        "Try these:\n"
+                        "`integrate(x**2, x)`\n"
+                        "`diff(cos(x), x)`\n"
+                        "`Matrix([[1,2],[3,4]]).inv()`\n"
+                        "`5 km to m`\n"
+                        "`sin(30)` (DEG mode)\n"
+                        "`200 * 5%`\n"
+                        "`/latex x^2 + 3x + 2`\n"
+                        "`/plot sin(x)`"
+                    )
 
     except Exception as e:
         print(f"Webhook error: {e}")
