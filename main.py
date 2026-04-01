@@ -25,6 +25,15 @@ bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 # ================= STORAGE =================
 chat_angle_mode = {}
 
+# ================= SMART INPUT FIX =================
+def preprocess_expression(expr: str) -> str:
+    expr = expr.lower().strip()
+
+    # sin 30 → sin(30)
+    expr = re.sub(r'(sin|cos|tan)\s+(\d+)', r'\1(\2)', expr)
+
+    return expr
+
 # ================= HELP MENU =================
 def get_help_message(name: str, mode: str) -> str:
     return f"""
@@ -47,6 +56,7 @@ def get_help_message(name: str, mode: str) -> str:
 📐 *Trigonometry*
 `sin(30)`
 `cos(60)`
+`tan(45)`
 
 Use:
 `/deg` or `/rad`
@@ -81,14 +91,28 @@ Use:
 ━━━━━━━━━━━━━━━━━━━━━━
 
 ✅ Easy to use  
-🔥 Try different math expressions!
-
+🔥 Try natural typing like: `cos 60`, `sin 30`
 """
 
 # ================= SAFE LOCALS =================
-def get_safe_locals():
+def get_safe_locals(chat_id=None):
+    mode = chat_angle_mode.get(chat_id, "rad")
+
+    if mode == "deg":
+        trig = {
+            "sin": lambda x: sp.sin(sp.rad(x)),
+            "cos": lambda x: sp.cos(sp.rad(x)),
+            "tan": lambda x: sp.tan(sp.rad(x)),
+        }
+    else:
+        trig = {
+            "sin": sp.sin,
+            "cos": sp.cos,
+            "tan": sp.tan,
+        }
+
     return {
-        "sin": sp.sin, "cos": sp.cos, "tan": sp.tan,
+        **trig,
         "sqrt": sp.sqrt,
         "log": sp.log,
         "exp": sp.exp,
@@ -109,14 +133,15 @@ def get_safe_locals():
     }
 
 # ================= EVALUATOR =================
-def evaluate(expr):
+def evaluate(expr, chat_id):
+    expr = preprocess_expression(expr)
     expr = expr.replace("^", "**")
 
     if not re.match(r"^[\d+\-*/().\s^,a-zA-Z0-9_=,%[\]]+$", expr):
         return None
 
     try:
-        res = sp.sympify(expr, locals=get_safe_locals())
+        res = sp.sympify(expr, locals=get_safe_locals(chat_id))
         return float(res.evalf())
     except:
         return None
@@ -143,17 +168,18 @@ async def webhook(request: Request):
 
     lower = text.lower()
 
-    # ===== START MESSAGE =====
+    # ===== START =====
     if lower == "/start":
         await asyncio.to_thread(
             bot.send_message,
             chat_id,
-            "👋 Welcome to Calculator 🤖\n\n"
-            "Made by @Sudhakaran12\n\n"
-            "👉 Click /help to see all features and how to use."
+            "👋 *Welcome to the Most Advanced Calculator* 🤖\n\n"
+            "🚀 With all powerful features built-in\n\n"
+            "👨‍💻 Made by @Sudhakaran12\n\n"
+            "👉 Type /help to see all features and how to use."
         )
 
-    # ===== HELP MENU =====
+    # ===== HELP =====
     elif lower == "/help":
         user = msg.get("from", {})
         name = user.get("first_name", "User")
@@ -176,7 +202,7 @@ async def webhook(request: Request):
 
     # ===== PLOT =====
     elif lower.startswith("/plot"):
-        expr = text[5:].strip()
+        expr = preprocess_expression(text[5:].strip())
         try:
             x = sp.symbols('x')
             f = sp.lambdify(x, sp.sympify(expr), 'numpy')
@@ -207,9 +233,9 @@ async def webhook(request: Request):
             except:
                 await asyncio.to_thread(bot.send_message, chat_id, "❌ Error")
 
-    # ===== NORMAL CALC =====
+    # ===== CALCULATE =====
     else:
-        result = evaluate(text)
+        result = evaluate(text, chat_id)
         if result is not None:
             await asyncio.to_thread(bot.send_message, chat_id, f"✅ `{result}`")
         else:
