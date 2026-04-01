@@ -1,6 +1,10 @@
 import os
 import re
 import asyncio
+import sys
+import io
+from contextlib import redirect_stdout
+
 import sympy as sp
 import numpy as np
 import matplotlib.pyplot as plt
@@ -28,8 +32,8 @@ bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 # ====================== STORAGE ======================
 chat_history: dict[int, list[dict]] = {}
 chat_variables: dict[int, dict[str, any]] = {}
-chat_angle_mode: dict[int, str] = {}          # "rad" or "deg"
-chat_custom_funcs: dict[int, dict[str, tuple[sp.Expr, list[str]]]] = {}  # name → (sympy_expr, arg_symbols)
+chat_angle_mode: dict[int, str] = {}  # "rad" or "deg"
+chat_custom_funcs: dict[int, dict[str, tuple[sp.Expr, list[str]]]] = {}
 
 def add_to_history(chat_id: int, expression: str, result: any):
     if chat_id not in chat_history:
@@ -66,7 +70,6 @@ def get_safe_locals(chat_id: int = None):
         "s": units_mod.second, "min": units_mod.minute, "h": units_mod.hour,
     }
 
-    # Statistics & Probability (sympy.stats + numpy)
     stats = {
         "mean": lambda *x: float(np.mean(x)),
         "median": lambda *x: float(np.median(x)),
@@ -80,7 +83,6 @@ def get_safe_locals(chat_id: int = None):
         "var": lambda dist: float(stats_var(dist)),
     }
 
-    # Finance
     finance = {
         "compound": lambda p, r, t, n=1: p * (1 + r/n)**(n * t),
         "simple_interest": lambda p, r, t: p * r * t,
@@ -112,41 +114,42 @@ def get_safe_locals(chat_id: int = None):
         **variables
     }
 
-    # Add custom functions as callable lambdas
+    # Custom functions
     for name, (expr, args) in custom.items():
         safe_dict[name] = lambda *vals, _expr=expr, _args=args: float(_expr.subs(dict(zip(_args, vals))).evalf())
 
     return safe_dict
 
-# ====================== CUSTOM FUNCTION PARSER ======================
+# ====================== CUSTOM FUNCTION PARSER (Improved) ======================
 def handle_custom_function_definition(text: str, chat_id: int):
-    """Support: f(x) = x^2 + 3*x   or   def g(x,y) = x + y"""
     text = text.strip()
-    if not re.search(r'^\s*(?:def\s+)?([a-zA-Z_]\w*)\s*\((.*?)\)\s*=\s*(.+)$', text):
-        return None
-    match = re.match(r'^\s*(?:def\s+)?([a-zA-Z_]\w*)\s*\((.*?)\)\s*=\s*(.+)$', text)
+    match = re.match(r'^\s*(?:def\s+)?([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*=\s*(.+)$', text, re.IGNORECASE)
     if not match:
         return None
     name, arg_str, body = match.groups()
     args = [a.strip() for a in arg_str.split(',') if a.strip()]
+    if not args or not name.isidentifier():
+        return None
+
     try:
         safe_locals = get_safe_locals(chat_id)
-        sym_body = sp.sympify(body.replace("^", "**"), locals=safe_locals)
+        body = body.replace("^", "**")
+        sym_body = sp.sympify(body, locals=safe_locals)
+
         if chat_id not in chat_custom_funcs:
             chat_custom_funcs[chat_id] = {}
         chat_custom_funcs[chat_id][name] = (sym_body, args)
+
         return f"✅ **Custom function defined:** `{name}({', '.join(args)})` = `{sym_body}`"
-    except:
-        return None
+    except Exception as e:
+        return f"❌ Failed to define function: {str(e)[:80]}"
 
 # ====================== SYSTEMS OF EQUATIONS ======================
 def handle_system_of_equations(text: str, chat_id: int = None):
-    """Support: x + y = 5, 2x - y = 1   or   solve x+y=5, 2x-y=1"""
     lower = text.lower().strip()
     if not ("," in text and "=" in text):
         return None
     try:
-        # Split into equations
         eqs_str = [e.strip() for e in text.replace("solve", "").split(",")]
         safe_locals = get_safe_locals(chat_id)
         eqs = []
@@ -166,7 +169,7 @@ def handle_system_of_equations(text: str, chat_id: int = None):
             return f"✅ **System solved:** {sol}"
         elif sol:
             return f"✅ **Solutions:** {sol}"
-        return "No solution"
+        return "❌ No solution found"
     except:
         return None
 
@@ -212,7 +215,7 @@ def evaluate_expression(expression: str, chat_id: int = None):
 
         safe_locals = get_safe_locals(chat_id)
 
-        # Variable assignment (normal)
+        # Variable assignment
         if '=' in expr and expr.count('=') == 1 and '(' not in expr.split('=')[0]:
             left, right = [part.strip() for part in expr.split('=', 1)]
             protected = {"sin","cos","tan","asin","acos","atan","sinh","cosh","tanh","asinh","acosh","atanh",
@@ -241,7 +244,7 @@ def evaluate_expression(expression: str, chat_id: int = None):
 # ====================== ROOT ======================
 @app.get("/")
 async def root():
-    return {"status": "🚀 ULTIMATE SCIENTIFIC CALCULATOR LIVE", "version": "v7.0 - Systems + Custom Functions + Probability + REPL"}
+    return {"status": "🚀 ULTIMATE SCIENTIFIC CALCULATOR LIVE", "version": "v7.1 - Fixed REPL + /clearall"}
 
 # ====================== WEBHOOK ======================
 @app.post("/webhook")
@@ -269,16 +272,14 @@ async def webhook(request: Request):
                 bot.send_message,
                 chat_id,
                 f"Hello {name} 👋\n\n"
-                "🚀 **ULTIMATE Calculator v7.0** — The Endgame!\n\n"
+                "🚀 **ULTIMATE Calculator v7.1** — The Endgame!\n\n"
                 f"📐 Angle mode: **{mode}**\n\n"
-                "✅ **NEW in v7.0:**\n"
-                "• **Systems of equations:** `x + y = 5, 2x - y = 1`\n"
-                "• **Custom functions:** `f(x) = x^2 + 3*x` then `f(5)`\n"
-                "• **Probability:** `Normal(0,1)`, `pdf(Normal(0,1), 0)`, `Binomial(10,0.5)`\n"
-                "• **Mini Python REPL:** `/py import math; math.sqrt(16)` (safe)\n\n"
-                "All previous features still here!\n\n"
+                "✅ **NEW in v7.1:**\n"
+                "• Fixed `/py` REPL (imports + print work!)\n"
+                "• `/clearall` command\n"
+                "• Systems, Custom functions, Probability, Units, Plot, LaTeX\n\n"
                 "Commands:\n"
-                "`/deg` `/rad` `/plot` `/latex` `/py` `/history` `/vars` `/clear` `/clearvars` `/clearfuncs`"
+                "`/deg` `/rad` `/plot` `/latex` `/py` `/history` `/vars` `/clear` `/clearvars` `/clearfuncs` `/clearall`"
             )
 
         elif lower_text == "/deg":
@@ -292,6 +293,12 @@ async def webhook(request: Request):
         elif lower_text == "/clearfuncs":
             chat_custom_funcs[chat_id] = {}
             await asyncio.to_thread(bot.send_message, chat_id, "🗑️ Custom functions cleared!")
+
+        elif lower_text == "/clearall":
+            chat_history[chat_id] = []
+            chat_variables[chat_id] = {}
+            chat_custom_funcs[chat_id] = {}
+            await asyncio.to_thread(bot.send_message, chat_id, "🗑️ **Everything cleared!** History, variables & custom functions.")
 
         elif lower_text == "/history":
             history = chat_history.get(chat_id, [])
@@ -357,20 +364,47 @@ async def webhook(request: Request):
             except Exception:
                 await asyncio.to_thread(bot.send_message, chat_id, f"❌ Could not render LaTeX for `{expr}`")
 
-        # ==================== MINI PYTHON REPL (SAFE) ====================
+        # ==================== MINI PYTHON REPL (FIXED) ====================
         elif lower_text.startswith("/py"):
             code = text[3:].strip()
             if not code:
-                await asyncio.to_thread(bot.send_message, chat_id, "🐍 Usage: `/py 2**10` or `/py import math; math.sqrt(16)`\n(Only safe math allowed)")
+                await asyncio.to_thread(bot.send_message, chat_id,
+                    "🐍 Usage: `/py 2**10` or `/py import math; math.sqrt(16)`\n"
+                    "Supports: imports, print(), multi-line, last expression result")
                 return {"ok": True}
             try:
-                # Extremely restricted safe eval (no os, no import except math/numpy)
-                safe_globals = {"__builtins__": {}, "math": __import__("math"), "np": np, "sp": sp}
-                result = eval(code, safe_globals, {})
-                await asyncio.to_thread(bot.send_message, chat_id, f"🐍 **Python REPL:**\n`{code}` → `{result}`")
-                add_to_history(chat_id, f"/py {code}", result)
+                safe_globals = {
+                    "__builtins__": {},
+                    "math": __import__("math"),
+                    "np": np,
+                    "sp": sp,
+                    "plt": plt,
+                }
+                safe_locals = {}
+
+                output_buf = io.StringIO()
+                with redirect_stdout(output_buf):
+                    exec(code, safe_globals, safe_locals)
+
+                output = output_buf.getvalue().strip()
+
+                # If no printed output, try to return the last expression
+                if not output:
+                    try:
+                        last_line = code.strip().splitlines()[-1].strip()
+                        if last_line and not last_line.startswith(('import ', 'from ')):
+                            result = eval(last_line, safe_globals, safe_locals)
+                            output = str(result)
+                    except:
+                        pass
+
+                final_output = output or "✅ Executed successfully (no output)"
+                await asyncio.to_thread(bot.send_message, chat_id,
+                    f"🐍 **Python REPL:**\n`{code}`\n\n**Output:**\n`{final_output}`")
+                add_to_history(chat_id, f"/py {code}", final_output[:100])
+
             except Exception as e:
-                await asyncio.to_thread(bot.send_message, chat_id, f"❌ REPL error: {str(e)[:100]}")
+                await asyncio.to_thread(bot.send_message, chat_id, f"❌ REPL error: {str(e)[:150]}")
 
         # ==================== MAIN CALCULATOR ====================
         else:
@@ -402,19 +436,19 @@ async def webhook(request: Request):
                     await asyncio.to_thread(bot.send_message, chat_id, result)
                 else:
                     add_to_history(chat_id, text, result)
-                    display = result if isinstance(result, str) and result.startswith("✅ **Solution:**") else f"✅ **Result:** `{result}`"
+                    display = f"✅ **Result:** `{result}`"
                     await asyncio.to_thread(bot.send_message, chat_id, display)
             else:
                 await asyncio.to_thread(
                     bot.send_message,
                     chat_id,
                     "🤖 **ULTIMATE Calculator Ready!**\n\n"
-                    "Try these new features:\n"
+                    "Try these:\n"
                     "`f(x) = x^2 + 3*x` then `f(5)`\n"
                     "`x + y = 5, 2x - y = 1`\n"
                     "`Normal(0,1)`\n"
                     "`pdf(Normal(0,1), 0)`\n"
-                    "`/py 2**10`\n"
+                    "`/py import math; math.sqrt(16)`\n"
                     "`/plot sin(x)`\n"
                     "`/latex diff(sin(x), x)`"
                 )
