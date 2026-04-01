@@ -1,7 +1,10 @@
 import os
 import re
 import asyncio
-import math
+import sympy as sp
+import numpy as np
+import matplotlib.pyplot as plt
+from io import BytesIO
 import telebot
 from fastapi import FastAPI, Request
 
@@ -9,7 +12,6 @@ app = FastAPI()
 
 # ====================== BOT TOKEN ======================
 TOKEN = os.getenv("BOT_TOKEN")
-
 if not TOKEN:
     raise RuntimeError(
         "❌ BOT_TOKEN environment variable is not set!\n"
@@ -18,58 +20,84 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
-# ====================== IN-MEMORY HISTORY ======================
+# ====================== STORAGE ======================
 chat_history: dict[int, list[dict]] = {}
+chat_variables: dict[int, dict[str, any]] = {}
 
 def add_to_history(chat_id: int, expression: str, result: any):
     if chat_id not in chat_history:
         chat_history[chat_id] = []
     chat_history[chat_id].append({"expr": expression, "result": result})
-    if len(chat_history[chat_id]) > 10:
+    if len(chat_history[chat_id]) > 15:   # increased limit
         chat_history[chat_id].pop(0)
 
+def get_safe_locals(chat_id: int = None):
+    """Safe namespace for sympy with built-in functions + user variables"""
+    variables = chat_variables.get(chat_id, {}) if chat_id else {}
+    return {
+        "sin": sp.sin, "cos": sp.cos, "tan": sp.tan,
+        "sqrt": sp.sqrt, "log": sp.log, "log10": sp.log10,
+        "exp": sp.exp, "pi": sp.pi, "e": sp.E,
+        "abs": sp.Abs, "factorial": sp.factorial,
+        **variables
+    }
 
-# ====================== ADVANCED SAFE CALCULATOR ======================
-def safe_evaluate(expression: str):
-    """Advanced safe evaluator with math functions, power, pi, e, etc."""
+# ====================== ULTRA ADVANCED EVALUATOR ======================
+def evaluate_expression(expression: str, chat_id: int = None):
     try:
         expr = expression.strip().replace("^", "**")
-
-        # Only safe characters allowed
-        if not re.match(r"^[\d+\-*/().\s^,a-zA-Z]+$", expr):
+        if not re.match(r"^[\d+\-*/().\s^,a-zA-Z=]+$", expr):
             return None
 
-        # Allowed functions & constants
-        safe_dict = {
-            "sin": math.sin,
-            "cos": math.cos,
-            "tan": math.tan,
-            "sqrt": math.sqrt,
-            "log": math.log,
-            "log10": math.log10,
-            "exp": math.exp,
-            "pi": math.pi,
-            "e": math.e,
-            "abs": abs,
-            "round": round,
-            "factorial": math.factorial,
-            "pow": pow,
-        }
+        safe_locals = get_safe_locals(chat_id)
 
-        result = eval(
-            expr,
-            {"__builtins__": None},
-            safe_dict
-        )
+        # 1. Variable assignment: x = 5
+        if '=' in expr and expr.count('=') == 1:
+            left, right = [part.strip() for part in expr.split('=', 1)]
+            if left.isidentifier() and left not in ["sin", "cos", "tan", "sqrt", "log", "exp", "pi", "e", "abs", "factorial"]:
+                try:
+                    val = sp.sympify(right, locals=safe_locals)
+                    if chat_id is not None:
+                        if chat_id not in chat_variables:
+                            chat_variables[chat_id] = {}
+                        chat_variables[chat_id][left] = val
+                    return f"✅ **Variable set:** `{left}` = `{val}`"
+                except:
+                    pass
 
-        # Clean output
-        if isinstance(result, float):
-            if result.is_integer():
-                return int(result)
-            return round(result, 8)
-        return result
+        # 2. Equation solving: x^2 - 5x + 6 = 0
+        if '=' in expr and expr.count('=') == 1:
+            try:
+                left, right = [part.strip() for part in expr.split('=', 1)]
+                eq = sp.Eq(
+                    sp.sympify(left, locals=safe_locals),
+                    sp.sympify(right, locals=safe_locals)
+                )
+                free_syms = list(eq.free_symbols)
+                if len(free_syms) == 1:
+                    sol = sp.solve(eq, free_syms[0])
+                    if sol:
+                        return f"✅ **Solution:** `{free_syms[0]}` = `{sol[0]}`"
+                    return "No real solution"
+                else:
+                    return f"✅ Solutions: {sp.solve(eq)}"
+            except:
+                pass
 
-    except Exception:  # Catch everything safely
+        # 3. Normal expression (numeric or symbolic)
+        result = sp.sympify(expr, locals=safe_locals)
+
+        # Try numeric first
+        try:
+            numeric = result.evalf(12)
+            if numeric.is_integer:
+                return int(numeric)
+            return round(float(numeric), 8)
+        except:
+            # Return simplified symbolic result
+            return str(result.simplify() if hasattr(result, "simplify") else result)
+
+    except Exception:
         return None
 
 
@@ -78,7 +106,7 @@ def safe_evaluate(expression: str):
 async def root():
     return {
         "status": "🚀 Advanced Calculator Bot is LIVE",
-        "version": "Advanced v2.1 (fixed detection)"
+        "version": "v3.0 - Symbolic + Variables + Plotting"
     }
 
 
@@ -87,14 +115,12 @@ async def root():
 async def webhook(request: Request):
     try:
         data = await request.json()
-
         if "message" not in data:
             return {"ok": True}
 
         msg = data["message"]
         chat_id = msg["chat"]["id"]
         text = msg.get("text", "").strip()
-
         if not text:
             return {"ok": True}
 
@@ -110,15 +136,17 @@ async def webhook(request: Request):
                 bot.send_message,
                 chat_id,
                 f"Hello {name} 👋\n\n"
-                "🚀 **Advanced Calculator Bot** ready!\n\n"
-                "✅ Supported:\n"
-                "• `5 + 3`, `100 / 4`\n"
-                "• `2^8`, `sqrt(16)`\n"
-                "• `sin(pi/2)`, `log(100)`, `factorial(5)`\n"
-                "• `pi`, `e`\n\n"
+                "🚀 **Advanced Calculator Bot v3.0**\n\n"
+                "✅ **New powerful features:**\n"
+                "• Variables: `x = 5` then `sin(x)`\n"
+                "• Solve equations: `x^2 - 5x + 6 = 0`\n"
+                "• Plot graphs: `/plot sin(x)`\n"
+                "• Full symbolic math (pi, e, factorial, log, etc.)\n\n"
                 "Commands:\n"
-                "`/history` → Last 10 results\n"
+                "`/history` → Last 15 results\n"
+                "`/vars` → Show variables\n"
                 "`/clear` → Clear history\n"
+                "`/clearvars` → Clear variables\n"
                 "`/help` → This message"
             )
 
@@ -136,25 +164,93 @@ async def webhook(request: Request):
             chat_history[chat_id] = []
             await asyncio.to_thread(bot.send_message, chat_id, "🗑️ History cleared!")
 
-        # ==================== CALCULATOR (FIXED) ====================
+        elif lower_text == "/clearvars":
+            chat_variables[chat_id] = {}
+            await asyncio.to_thread(bot.send_message, chat_id, "🗑️ All variables cleared!")
+
+        elif lower_text == "/vars":
+            vars_dict = chat_variables.get(chat_id, {})
+            if not vars_dict:
+                await asyncio.to_thread(bot.send_message, chat_id, "📌 No variables set yet.\nUse: `x = 5`")
+            else:
+                txt = "📌 **Your Variables:**\n\n"
+                for v, val in vars_dict.items():
+                    txt += f"`{v}` = `{val}`\n"
+                await asyncio.to_thread(bot.send_message, chat_id, txt)
+
+        # ==================== PLOT COMMAND ====================
+        elif lower_text.startswith("/plot"):
+            plot_expr = text[5:].strip()
+            if not plot_expr:
+                await asyncio.to_thread(
+                    bot.send_message, chat_id,
+                    "📊 **Usage:** `/plot sin(x)` or `/plot x^2 - 3x + 2`"
+                )
+                return {"ok": True}
+
+            try:
+                safe_locals = get_safe_locals(chat_id)
+                x_sym = sp.symbols('x')
+                func = sp.sympify(plot_expr.replace("^", "**"), locals=safe_locals)
+                f = sp.lambdify(x_sym, func, 'numpy')
+
+                x_vals = np.linspace(-10, 10, 500)
+                y_vals = np.real(f(x_vals))   # handle complex safely
+
+                plt.figure(figsize=(10, 6))
+                plt.plot(x_vals, y_vals, color='#00aaff', linewidth=2.5)
+                plt.title(f"📈 Plot of {plot_expr}")
+                plt.xlabel("x")
+                plt.ylabel("f(x)")
+                plt.grid(True, alpha=0.3)
+                plt.axhline(0, color='black', lw=0.8, alpha=0.5)
+                plt.axvline(0, color='black', lw=0.8, alpha=0.5)
+
+                buf = BytesIO()
+                plt.savefig(buf, format='png', dpi=220, bbox_inches='tight')
+                buf.seek(0)
+                plt.close()
+
+                await asyncio.to_thread(
+                    bot.send_photo,
+                    chat_id,
+                    photo=buf,
+                    caption=f"✅ **Plotted:** `{plot_expr}`\nRange: `x ∈ [-10, 10]`"
+                )
+                add_to_history(chat_id, f"plot({plot_expr})", "graph generated")
+
+            except Exception as e:
+                await asyncio.to_thread(
+                    bot.send_message, chat_id,
+                    f"❌ Could not plot `{plot_expr}`\nMake sure it's a valid function of `x`."
+                )
+
+        # ==================== MAIN CALCULATOR (Assignment / Solve / Normal) ====================
         else:
-            # Try to evaluate everything that is not a command
-            result = safe_evaluate(text)
+            result = evaluate_expression(text, chat_id)
 
             if result is not None:
-                add_to_history(chat_id, text, result)
-                await asyncio.to_thread(
-                    bot.send_message,
-                    chat_id,
-                    f"✅ **Result:** `{result}`"
-                )
+                if isinstance(result, str) and "**Variable set:**" in result:
+                    # Assignment - no history
+                    await asyncio.to_thread(bot.send_message, chat_id, result)
+                else:
+                    # Normal calc or solution
+                    add_to_history(chat_id, text, result)
+                    if isinstance(result, str) and result.startswith("✅ **Solution:**"):
+                        display = result
+                    else:
+                        display = f"✅ **Result:** `{result}`"
+                    await asyncio.to_thread(bot.send_message, chat_id, display)
             else:
                 await asyncio.to_thread(
                     bot.send_message,
                     chat_id,
-                    "🤖 Send a math expression like:\n"
-                    "`5 + 3`, `sqrt(16)`, `2^8`, `sin(pi/2)`, `log(100)`\n\n"
-                    "Type `/help` for more info"
+                    "🤖 Send any math expression:\n"
+                    "`5 + 3`, `sin(pi/2)`, `factorial(10)`, `log(100)`\n\n"
+                    "Or try:\n"
+                    "`x = 5` (set variable)\n"
+                    "`x^2 - 5x + 6 = 0` (solve)\n"
+                    "`/plot sin(x)` (graph)"
                 )
 
     except Exception as e:
