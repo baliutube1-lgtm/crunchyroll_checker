@@ -18,7 +18,6 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN, parse_mode="Markdown")
 
-
 # ====================== IN-MEMORY HISTORY ======================
 chat_history: dict[int, list[dict]] = {}
 
@@ -36,7 +35,7 @@ def safe_evaluate(expression: str):
     try:
         expr = expression.strip().replace("^", "**")
 
-        # Only safe characters
+        # Only safe characters allowed
         if not re.match(r"^[\d+\-*/().\s^,a-zA-Z]+$", expr):
             return None
 
@@ -70,7 +69,7 @@ def safe_evaluate(expression: str):
             return round(result, 8)
         return result
 
-    except:
+    except Exception:  # Catch everything safely
         return None
 
 
@@ -79,7 +78,7 @@ def safe_evaluate(expression: str):
 async def root():
     return {
         "status": "🚀 Advanced Calculator Bot is LIVE",
-        "version": "Advanced v2.0"
+        "version": "Advanced v2.1 (fixed detection)"
     }
 
 
@@ -101,7 +100,7 @@ async def webhook(request: Request):
 
         lower_text = text.lower()
 
-        # COMMANDS
+        # ==================== COMMANDS ====================
         if lower_text in ["/start", "/help"]:
             user = msg.get("from", {})
             username = user.get("username")
@@ -123,7 +122,6 @@ async def webhook(request: Request):
                 "`/help` → This message"
             )
 
-        # HISTORY
         elif lower_text == "/history":
             history = chat_history.get(chat_id, [])
             if not history:
@@ -134,14 +132,15 @@ async def webhook(request: Request):
                     txt += f"{i}. `{item['expr']}` = **{item['result']}**\n"
                 await asyncio.to_thread(bot.send_message, chat_id, txt)
 
-        # CLEAR
         elif lower_text == "/clear":
             chat_history[chat_id] = []
             await asyncio.to_thread(bot.send_message, chat_id, "🗑️ History cleared!")
 
-        # CALCULATOR
-        elif any(op in text for op in ["+", "-", "*", "/", "^", "(", "sin", "cos", "tan", "sqrt", "log", "pi", "e"]):
+        # ==================== CALCULATOR (FIXED) ====================
+        else:
+            # Try to evaluate everything that is not a command
             result = safe_evaluate(text)
+
             if result is not None:
                 add_to_history(chat_id, text, result)
                 await asyncio.to_thread(
@@ -153,16 +152,10 @@ async def webhook(request: Request):
                 await asyncio.to_thread(
                     bot.send_message,
                     chat_id,
-                    "❌ Invalid expression"
+                    "🤖 Send a math expression like:\n"
+                    "`5 + 3`, `sqrt(16)`, `2^8`, `sin(pi/2)`, `log(100)`\n\n"
+                    "Type `/help` for more info"
                 )
-
-        # UNKNOWN
-        else:
-            await asyncio.to_thread(
-                bot.send_message,
-                chat_id,
-                "🤖 Send math like: `5 + 3`, `sqrt(16)`, `2^8`, `sin(pi/2)`\n\nType `/help`"
-            )
 
     except Exception as e:
         print(f"Webhook error: {e}")
