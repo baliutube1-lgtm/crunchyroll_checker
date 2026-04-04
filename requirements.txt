@@ -1,6 +1,0 @@
-fastapi
-uvicorn[standard]
-pyTelegramBotAPI
-sympy
-numpy
-matplotlib
